@@ -1,119 +1,132 @@
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox, simpledialog
-from pytube import YouTube
-from pytube.exceptions import RegexMatchError, VideoUnavailable, PytubeError
+from tkinter import ttk, filedialog, messagebox
 import os
+import subprocess
 import threading
-import time
-import random
-from urllib.error import HTTPError
-from fake_useragent import UserAgent
+import json
+import sys
+import re
+from pathlib import Path
+import queue
 
 class YouTubeDownloader:
     def __init__(self, root):
         self.root = root
-        self.root.title("YouTube Downloader Ultra")
-        self.root.geometry("700x500")
+        self.root.title("YouTube Downloader by:verras")
+        self.root.geometry("750x550")
         self.root.resizable(False, False)
         
-        self.user_agent = UserAgent()
-        self.max_retries = 3
-        self.retry_delay = 5
-        
+       
         self.video_url = ""
-        self.save_path = os.path.expanduser("~/Downloads")
+        self.save_path = str(Path.home() / "Downloads")  
         self.downloading = False
-        self.yt = None
+        self.video_info = None
+        self.process = None  
+        self.update_queue = queue.Queue()  
+        
+        
+        self.yt_dlp_path = self.find_yt_dlp()
+        if not self.yt_dlp_path:
+            self.show_installation_error()
+            return
+        
         
         self.setup_styles()
         self.create_widgets()
-        self.create_menu()
+        
+       
+        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
+        
+        
+        self.process_ui_updates()
+    
+    def find_yt_dlp(self):
+        
+        try:
+            subprocess.run(["yt-dlp", "--version"], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            return "yt-dlp"
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            local_path = os.path.join(os.path.dirname(__file__), "yt-dlp")
+            if os.path.isfile(local_path) and os.access(local_path, os.X_OK):
+                return local_path
+            return None
+    
+    def show_installation_error(self):
+        error_msg = (
+            "yt-dlp não está instalado ou não foi encontrado.\n\n"
+            "Por favor instale usando um dos seguintes métodos:\n\n"
+            "Windows (PowerShell):\n"
+            "iwr https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe -OutFile yt-dlp.exe\n\n"
+            "Mac/Linux:\n"
+            "sudo curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp\n"
+            "sudo chmod a+rx /usr/local/bin/yt-dlp\n\n"
+            "Ou visite: https://github.com/yt-dlp/yt-dlp"
+        )
+        messagebox.showerror("Erro de Instalação", error_msg)
+        self.root.destroy()
+        sys.exit(1)
     
     def setup_styles(self):
         style = ttk.Style()
-        style.configure("TButton", padding=6, font=('Arial', 10))
+        style.theme_use('clam')
+        style.configure("TButton", padding=6, font=('Arial', 10), background='#4CAF50', foreground='white')
         style.configure("TLabel", font=('Arial', 10))
-        style.configure("Title.TLabel", font=('Arial', 14, 'bold'))
-        style.configure("Status.TLabel", font=('Arial', 9))
-        style.configure("Info.TFrame", background="#f0f0f0")
-    
-    def create_menu(self):
-        menubar = tk.Menu(self.root)
-        
-        config_menu = tk.Menu(menubar, tearoff=0)
-        config_menu.add_command(label="Mudar User-Agent", command=self.set_user_agent)
-        config_menu.add_command(label="Configurar Tentativas", command=self.set_retries)
-        menubar.add_cascade(label="Configurações", menu=config_menu)
-        
-        self.root.config(menu=menubar)
-    
-    def set_user_agent(self):
-        new_agent = simpledialog.askstring(
-            "User-Agent",
-            "Digite um User-Agent personalizado (ou deixe em branco para aleatório):",
-            parent=self.root
-        )
-        if new_agent:
-            self.user_agent = lambda: new_agent
-            messagebox.showinfo("Sucesso", f"User-Agent definido como:\n{new_agent}")
-    
-    def set_retries(self):
-        retries = simpledialog.askinteger(
-            "Tentativas",
-            "Número máximo de tentativas (3-10):",
-            parent=self.root,
-            minvalue=3,
-            maxvalue=10
-        )
-        if retries:
-            self.max_retries = retries
-            messagebox.showinfo("Sucesso", f"Máximo de tentativas: {retries}")
+        style.configure("Title.TLabel", font=('Arial', 16, 'bold'), foreground='#333')
+        style.configure("Status.TLabel", font=('Arial', 10))
+        style.configure("Info.TFrame", background="#f5f5f5", borderwidth=2, relief="groove")
+        style.map("TButton", background=[('active', '#45a049')])
     
     def create_widgets(self):
-
-        title_frame = ttk.Frame(self.root)
-        title_frame.pack(pady=10)
+    
+        title_frame = ttk.Frame(self.root, style="Info.TFrame")
+        title_frame.pack(pady=10, padx=10, fill=tk.X)
         
         ttk.Label(
             title_frame,
-            text="YouTube Downloader Ultra",
+            text="YouTube Downloader Premium",
             style="Title.TLabel"
-        ).pack()
+        ).pack(pady=5)
         
+
         main_frame = ttk.Frame(self.root)
         main_frame.pack(pady=10, padx=20, fill=tk.BOTH, expand=True)
         
+
         url_frame = ttk.Frame(main_frame)
         url_frame.pack(fill=tk.X, pady=5)
         
         ttk.Label(url_frame, text="URL do YouTube:").pack(side=tk.LEFT)
-        self.url_entry = ttk.Entry(url_frame, width=50)
+        self.url_entry = ttk.Entry(url_frame, width=60)
         self.url_entry.pack(side=tk.LEFT, padx=5, expand=True, fill=tk.X)
         
+
         folder_frame = ttk.Frame(main_frame)
         folder_frame.pack(fill=tk.X, pady=5)
         
         ttk.Label(folder_frame, text="Pasta de destino:").pack(side=tk.LEFT)
-        self.folder_entry = ttk.Entry(folder_frame, width=50)
+        self.folder_entry = ttk.Entry(folder_frame, width=60)
         self.folder_entry.pack(side=tk.LEFT, padx=5, expand=True, fill=tk.X)
         self.folder_entry.insert(0, self.save_path)
         ttk.Button(
             folder_frame,
             text="Procurar",
-            command=self.browse_folder
+            command=self.browse_folder,
+            style="TButton"
         ).pack(side=tk.LEFT)
         
+ 
         self.info_frame = ttk.LabelFrame(main_frame, text="Informações do Vídeo", style="Info.TFrame")
         self.info_frame.pack(fill=tk.BOTH, pady=10, expand=True)
         
         self.info_text = tk.Text(
             self.info_frame,
-            height=10,
+            height=12,
             wrap=tk.WORD,
             state=tk.DISABLED,
             font=('Arial', 9),
             padx=5,
-            pady=5
+            pady=5,
+            background="#f5f5f5"
         )
         scrollbar = ttk.Scrollbar(self.info_frame, command=self.info_text.yview)
         self.info_text.configure(yscrollcommand=scrollbar.set)
@@ -121,39 +134,67 @@ class YouTubeDownloader:
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         self.info_text.pack(padx=5, pady=5, fill=tk.BOTH, expand=True)
         
+  
+        self.progress_frame = ttk.Frame(main_frame)
+        self.progress_frame.pack(fill=tk.X, pady=10)
+        
+        self.progress_label = ttk.Label(
+            self.progress_frame,
+            text="Progresso:",
+            font=('Arial', 9)
+        )
+        self.progress_label.pack(side=tk.LEFT)
+        
         self.progress = ttk.Progressbar(
-            main_frame,
+            self.progress_frame,
             orient=tk.HORIZONTAL,
-            length=550,
+            length=500,
             mode='determinate'
         )
-        self.progress.pack(pady=10)
+        self.progress.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=5)
         
+
         button_frame = ttk.Frame(main_frame)
         button_frame.pack(pady=10)
         
         self.fetch_button = ttk.Button(
             button_frame,
             text="Obter Informações",
-            command=self.get_video_info_threaded
+            command=self.get_video_info_threaded,
+            style="TButton"
         )
         self.fetch_button.pack(side=tk.LEFT, padx=5)
         
         self.download_button = ttk.Button(
             button_frame,
-            text="Baixar MP4",
+            text="Baixar MP4 (Melhor Qualidade)",
             state=tk.DISABLED,
-            command=self.start_download
+            command=self.start_download,
+            style="TButton"
         )
         self.download_button.pack(side=tk.LEFT, padx=5)
         
+        self.cancel_button = ttk.Button(
+            button_frame,
+            text="Cancelar",
+            state=tk.DISABLED,
+            command=self.cancel_download,
+            style="TButton"
+        )
+        self.cancel_button.pack(side=tk.LEFT, padx=5)
+        
+    
+        self.status_frame = ttk.Frame(self.root)
+        self.status_frame.pack(fill=tk.X, pady=5, padx=10)
+        
         self.status_label = ttk.Label(
-            self.root,
+            self.status_frame,
             text="Pronto para começar",
             style="Status.TLabel",
-            foreground="blue"
+            foreground="blue",
+            wraplength=700
         )
-        self.status_label.pack(pady=5)
+        self.status_label.pack(fill=tk.X)
     
     def browse_folder(self):
         folder = filedialog.askdirectory(initialdir=self.save_path)
@@ -166,184 +207,274 @@ class YouTubeDownloader:
         if not self.downloading:
             self.video_url = self.url_entry.get().strip()
             if not self.video_url:
-                messagebox.showerror("Erro", "Por favor, insira uma URL do YouTube")
+                messagebox.showerror("Erro", "Por favor, insira uma URL do YouTube válida")
                 return
             
-            thread = threading.Thread(target=self.get_video_info_with_retry, daemon=True)
+            self.toggle_buttons(False)
+            self.clear_info()
+            self.update_status("Obtendo informações do vídeo...", "blue")
+            
+            thread = threading.Thread(target=self.get_video_info, daemon=True)
             thread.start()
     
-    def get_video_info_with_retry(self, attempt=1):
+    def get_video_info(self):
         try:
-            self.toggle_buttons(False)
-            self.update_status(f"Conectando... (Tentativa {attempt}/{self.max_retries})", "orange")
+            cmd = [
+                self.yt_dlp_path,
+                "--dump-json",
+                "--no-warnings",
+                "--no-check-certificate",
+                self.video_url
+            ]
             
-            time.sleep(random.uniform(1.0, 3.0))
-            
-            self.yt = YouTube(
-                self.video_url,
-                on_progress_callback=self.progress_function,
-                on_complete_callback=self.complete_function,
-                use_oauth=False,
-                allow_oauth_cache=False
+            result = subprocess.run(
+                cmd,
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding='utf-8'
             )
             
-            self.yt.bypass_age_gate()
+            self.video_info = json.loads(result.stdout)
+            self.root.after(0, self.update_video_info)
+            self.update_queue.put(("status", "Informações obtidas com sucesso! Clique em 'Baixar MP4' para continuar.", "green"))
+            self.update_queue.put(("download_button", tk.NORMAL))
             
-            if not self.yt.vid_info:
-                raise PytubeError("Resposta vazia do YouTube")
-            
-            self.update_video_info()
-            self.update_status("Informações obtidas com sucesso!", "green")
-            self.download_button.config(state=tk.NORMAL)
-            
-        except (HTTPError, ConnectionError) as e:
-            if attempt < self.max_retries:
-                wait_time = self.retry_delay * attempt
-                self.update_status(f"Erro 403. Tentando novamente em {wait_time}s...", "orange")
-                time.sleep(wait_time)
-                self.get_video_info_with_retry(attempt + 1)
-            else:
-                self.handle_403_error(e)
+        except subprocess.CalledProcessError as e:
+            error_msg = self.parse_error_message(e.stderr)
+            self.handle_error(f"Erro ao obter informações:\n{error_msg}")
+        except json.JSONDecodeError:
+            self.handle_error("Erro ao processar informações do vídeo. URL pode ser inválida.")
         except Exception as e:
-            self.handle_error(e)
+            self.handle_error(f"Erro inesperado: {str(e)}")
         finally:
-            self.toggle_buttons(True)
+            self.update_queue.put(("buttons", True))
+    
+    def parse_error_message(self, error_msg):
+        if "This video is unavailable" in error_msg:
+            return "Vídeo indisponível (pode ter sido removido ou é privado)"
+        elif "Unable to download webpage" in error_msg:
+            return "Não foi possível acessar o vídeo (verifique sua conexão)"
+        elif "Unsupported URL" in error_msg:
+            return "URL do YouTube inválida ou não suportada"
+        elif error_msg.strip():
+            return error_msg.strip()
+        return "Erro desconhecido ao acessar o vídeo"
     
     def update_video_info(self):
+        if not self.video_info:
+            return
+            
         self.info_text.config(state=tk.NORMAL)
         self.info_text.delete(1.0, tk.END)
         
-        info = f"▶ Título: {self.yt.title}\n"
-        info += f"⏱ Duração: {self.yt.length // 60}:{self.yt.length % 60:02d}\n"
-        info += f"👤 Autor: {self.yt.author}\n"
-        info += f"👀 Visualizações: {self.yt.views:,}\n"
-        info += f"\n📦 Formatos disponíveis:\n"
+        info = f"📺 Título: {self.video_info.get('title', 'N/A')}\n"
+        info += f"⏱ Duração: {self.format_duration(self.video_info.get('duration', 0))}\n"
+        info += f"👤 Canal: {self.video_info.get('uploader', 'N/A')}\n"
+        info += f"🔢 Visualizações: {self.video_info.get('view_count', 'N/A')}\n"
         
-        streams = self.yt.streams.filter(
-            progressive=True,
-            file_extension='mp4'
-        ).order_by('resolution').desc()
-        
-        for stream in streams:
-            info += f"- {stream.resolution} ({stream.filesize_mb:.1f} MB)\n"
+        best_format = self.get_best_mp4_format()
+        if best_format:
+            info += f"\n🎬 Melhor formato MP4 disponível:\n"
+            info += f"📏 Resolução: {best_format.get('height', '?')}p\n"
+            info += f"💾 Tamanho estimado: {self.format_size(best_format.get('filesize', 0))}\n"
+            info += f"📦 Codec de vídeo: {best_format.get('vcodec', '?')}\n"
+            info += f"🎵 Codec de áudio: {best_format.get('acodec', '?')}\n"
+        else:
+            info += "\n⚠️ Não foi possível determinar o melhor formato MP4\n"
         
         self.info_text.insert(tk.END, info)
         self.info_text.config(state=tk.DISABLED)
     
+    def get_best_mp4_format(self):
+        if not self.video_info or 'formats' not in self.video_info:
+            return None
+        
+        mp4_formats = [
+            f for f in self.video_info['formats'] 
+            if f.get('vcodec') != 'none' 
+            and f.get('acodec') != 'none'
+            and f.get('ext', '').lower() == 'mp4'
+        ]
+        
+        if not mp4_formats:
+            return None
+        
+        return max(
+            mp4_formats,
+            key=lambda x: (
+                x.get('height', 0),
+                x.get('width', 0),
+                x.get('tbr', 0)
+            )
+        )
+    
+    def format_duration(self, seconds):
+        if not seconds:
+            return "N/A"
+        minutes, seconds = divmod(seconds, 60)
+        hours, minutes = divmod(minutes, 60)
+        return f"{int(hours):02d}:{int(minutes):02d}:{int(seconds):02d}"
+    
+    def format_size(self, bytes_size):
+        if not bytes_size:
+            return "N/A"
+        for unit in ['B', 'KB', 'MB', 'GB']:
+            if bytes_size < 1024.0:
+                return f"{bytes_size:.1f} {unit}"
+            bytes_size /= 1024.0
+        return f"{bytes_size:.1f} GB"
+    
     def start_download(self):
-        if not self.downloading and self.yt:
+        if not self.downloading and self.video_info:
             self.downloading = True
+            self.progress['value'] = 0
+            self.cancel_button.config(state=tk.NORMAL)
             thread = threading.Thread(target=self.download_video, daemon=True)
             thread.start()
     
     def download_video(self):
         try:
-            self.update_status("Preparando download...", "orange")
+            self.update_queue.put(("status", "Preparando download...", "blue"))
+            os.makedirs(self.save_path, exist_ok=True)
             
-            stream = self.yt.streams.filter(
-                progressive=True,
-                file_extension='mp4'
-            ).order_by('resolution').desc().first()
+            best_format = self.get_best_mp4_format()
+            format_id = best_format['format_id'] if best_format else "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]"
             
-            if not stream:
-                raise PytubeError("Nenhum formato MP4 disponível")
+            cmd = [
+                self.yt_dlp_path,
+                "-f", format_id,
+                "--merge-output-format", "mp4",
+                "--no-part",
+                "--no-check-certificate",
+                "--newline",
+                "-o", os.path.join(self.save_path, "%(title)s.%(ext)s"),
+                self.video_url
+            ]
             
-            self.update_status(f"Baixando: {stream.resolution}...", "orange")
+            self.update_queue.put(("status", "Iniciando download...", "blue"))
             
-            temp_path = os.path.join(self.save_path, f"temp_{time.time()}")
-            os.makedirs(temp_path, exist_ok=True)
-            
-            stream.download(
-                output_path=temp_path,
-                skip_existing=False,
-                timeout=30
+            self.process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                universal_newlines=True,
+                encoding='utf-8',
+                errors='replace',
+                bufsize=1
             )
             
-            downloaded_file = os.listdir(temp_path)[0]
-            final_path = os.path.join(self.save_path, downloaded_file)
-            os.rename(os.path.join(temp_path, downloaded_file), final_path)
-            os.rmdir(temp_path)
+            progress_re = re.compile(r'\[download\]\s*(\d{1,3}\.\d)%')
             
-            self.complete_function(stream, final_path)
+            for line in self.process.stdout:
+                if not self.downloading:  # Check for cancellation
+                    self.process.terminate()
+                    break
+                
+                progress_match = progress_re.search(line)
+                if progress_match:
+                    try:
+                        progress = float(progress_match.group(1))
+                        self.update_queue.put(("progress", progress))
+                        self.update_queue.put(("status", f"Baixando: {progress:.1f}%", "blue"))
+                    except ValueError:
+                        pass
+                elif "[download]" in line or "ETA" in line:
+                    self.update_queue.put(("status", line.strip(), "blue"))
             
-        except HTTPError as e:
-            if e.code == 403:
-                self.handle_403_error(e)
-            else:
-                self.handle_error(e)
-        except Exception as e:
-            self.handle_error(e)
-        finally:
-            self.downloading = False
-            self.toggle_buttons(True)
-    
-    def progress_function(self, stream, chunk, bytes_remaining):
-        total_size = stream.filesize
-        bytes_downloaded = total_size - bytes_remaining
-        percentage = (bytes_downloaded / total_size) * 100
+            self.process.wait()
+            if self.process.returncode != 0 and self.downloading:
+                raise subprocess.CalledProcessError(
+                    self.process.returncode,
+                    cmd,
+                    output="Erro durante o download"
+                )
+            
+            if self.downloading:
+                self.update_queue.put(("status", "✅ Download concluído com sucesso!", "green"))
+                self.update_queue.put(("messagebox", "Sucesso", f"Vídeo baixado e salvo em:\n{self.save_path}"))
         
-        self.progress['value'] = percentage
-        self.update_status(
-            f"Baixando: {percentage:.1f}% | "
-            f"{bytes_downloaded/1024/1024:.1f}MB de {total_size/1024/1024:.1f}MB",
-            "orange"
-        )
+        except subprocess.CalledProcessError as e:
+            self.handle_error(f"Erro no download (código {e.returncode}):\n{e.output or 'Erro desconhecido'}")
+        except Exception as e:
+            self.handle_error(f"Erro inesperado: {str(e)}")
+        finally:
+            self.process = None
+            self.downloading = False
+            self.update_queue.put(("buttons", True))
+            self.update_queue.put(("cancel_button", tk.DISABLED))
     
-    def complete_function(self, stream, file_path):
-        self.progress['value'] = 100
-        self.update_status(
-            f"✅ Download completo!\n{os.path.basename(file_path)}",
-            "green"
-        )
-        messagebox.showinfo("Sucesso", f"Vídeo salvo em:\n{file_path}")
+    def cancel_download(self):
+        if self.downloading:
+            self.downloading = False
+            self.update_status("Cancelando download...", "red")
+            if self.process:
+                self.process.terminate()
+    
+    def clear_info(self):
+        self.info_text.config(state=tk.NORMAL)
+        self.info_text.delete(1.0, tk.END)
+        self.info_text.config(state=tk.DISABLED)
+        self.progress['value'] = 0
     
     def update_status(self, message, color="black"):
         self.status_label.config(text=message, foreground=color)
-        self.root.update_idletasks()
     
     def toggle_buttons(self, enable):
         state = tk.NORMAL if enable else tk.DISABLED
         self.fetch_button.config(state=state)
-        self.download_button.config(state=state if self.yt else tk.DISABLED)
-        self.root.update_idletasks()
+        self.download_button.config(state=state if self.video_info else tk.DISABLED)
+        self.cancel_button.config(state=tk.DISABLED if not self.downloading else tk.NORMAL)
     
-    def handle_403_error(self, error):
-        error_msg = (
-            "Erro 403: Acesso negado pelo YouTube.\n\n"
-            "Possíveis soluções:\n"
-            "1. Tente novamente mais tarde\n"
-            "2. Use uma VPN\n"
-            "3. Mude o User-Agent nas configurações\n"
-            "4. Atualize o pytube (pip install pytube --upgrade)\n"
-            "5. Reinicie o programa"
-        )
-        self.update_status("Erro 403: Acesso negado", "red")
-        messagebox.showerror("Erro de Acesso", error_msg)
-        self.reset_interface()
+    def handle_error(self, error_msg):
+        self.update_queue.put(("status", f"❌ {error_msg}", "red"))
+        self.update_queue.put(("messagebox", "Erro", error_msg))
+        self.update_queue.put(("clear_info",))
+        self.downloading = False
+        self.update_queue.put(("buttons", True))
     
-    def handle_error(self, error):
-        error_msg = str(error)
-        if "HTTP Error 403" in error_msg:
-            self.handle_403_error(error)
+    def process_ui_updates(self):
+        try:
+            while True:
+                update = self.update_queue.get_nowait()
+                action, *args = update
+                if action == "status":
+                    self.update_status(*args)
+                elif action == "progress":
+                    self.progress['value'] = args[0]
+                elif action == "buttons":
+                    self.toggle_buttons(args[0])
+                elif action == "download_button":
+                    self.download_button.config(state=args[0])
+                elif action == "cancel_button":
+                    self.cancel_button.config(state=args[0])
+                elif action == "messagebox":
+                    messagebox.showinfo(*args) if args[0] == "Sucesso" else messagebox.showerror(*args)
+                elif action == "clear_info":
+                    self.clear_info()
+        except queue.Empty:
+            pass
+        self.root.after(100, self.process_ui_updates)
+    
+    def on_closing(self):
+        if self.downloading:
+            if messagebox.askyesno("Confirmar", "Um download está em andamento. Deseja cancelar e fechar?"):
+                self.cancel_download()
+                self.root.destroy()
         else:
-            self.update_status(f"Erro: {error_msg}", "red")
-            messagebox.showerror("Erro", error_msg)
-            self.reset_interface()
-    
-    def reset_interface(self):
-        self.info_text.config(state=tk.NORMAL)
-        self.info_text.delete(1.0, tk.END)
-        self.info_text.config(state=tk.DISABLED)
-        self.download_button.config(state=tk.DISABLED)
-        self.progress['value'] = 0
+            self.root.destroy()
 
 if __name__ == "__main__":
-    try:
-        from pytube import __main__
-        __main__.main()
-    except:
-        pass
-    
     root = tk.Tk()
+    
+    window_width = 750
+    window_height = 550
+    screen_width = root.winfo_screenwidth()
+    screen_height = root.winfo_screenheight()
+    x = (screen_width // 2) - (window_width // 2)
+    y = (screen_height // 2) - (window_height // 2)
+    root.geometry(f"{window_width}x{window_height}+{x}+{y}")
+    
     app = YouTubeDownloader(root)
     root.mainloop()
